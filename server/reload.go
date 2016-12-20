@@ -453,6 +453,16 @@ func (c *clientAdvertiseOption) Apply(server *Server) {
 	server.Noticef("Reload: client_advertise = %s", c.newValue)
 }
 
+// msgRateOption implements the option interface for the `msg_rate` setting.
+type msgRateOption struct {
+	noopOption
+	newValue int
+}
+
+func (m *msgRateOption) Apply(server *Server) {
+	server.Noticef("Reloaded msg_rate = %v", m.newValue)
+}
+
 // Reload reads the current configuration file and applies any supported
 // changes. This returns an error if the server was not started with a config
 // file or an option which doesn't support hot-swapping was changed.
@@ -593,6 +603,8 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 			// Ignore NoLog and NoSigs options since they are not parsed and only used in
 			// testing.
 			continue
+		case "msgrate":
+			diffOpts = append(diffOpts, &msgRateOption{newValue: newValue.(int)})
 		case "port":
 			// check to see if newValue == 0 and continue if so.
 			if newValue == 0 {

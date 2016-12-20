@@ -154,6 +154,9 @@ type client struct {
 	rtt      time.Duration
 	rttStart time.Time
 
+	rateMaxMsgs  int64
+	rateMaxBytes int64
+
 	route *route
 
 	debug bool
@@ -384,7 +387,13 @@ func (c *client) readLoop() {
 		return
 	}
 
-	// Start read buffer.
+	// Snapshot server options.
+	opts := s.getOpts()
+	// Now it is safe to check opts.MsgRate since we deal with a copy
+	if int64(opts.MsgRate) != c.rateMaxMsgs {
+		c.rateMaxMsgs = int64(opts.MsgRate)
+		c.rateMaxBytes = c.rateMaxMsgs * 512
+	}
 
 	b := make([]byte, c.in.rsz)
 
@@ -1428,8 +1437,9 @@ func (c *client) processMsg(msg []byte) {
 
 	// Update statistics
 	// The msg includes the CR_LF, so pull back out for accounting.
+	msgSize := len(msg) - LEN_CR_LF
 	c.in.msgs += 1
-	c.in.bytes += len(msg) - LEN_CR_LF
+	c.in.bytes += msgSize
 
 	if c.trace {
 		c.traceMsg(msg)
@@ -1454,6 +1464,12 @@ func (c *client) processMsg(msg []byte) {
 	// it's still valid, avoiding contention on the shared sublist.
 	var r *SublistResult
 	var ok bool
+	var doRate bool
+
+	if c.rateMaxMsgs > 0 {
+		doRate = true
+		srv.doRateControl(c.rateMaxMsgs, c.rateMaxBytes, int64(msgSize))
+	}
 
 	genid := atomic.LoadUint64(&srv.sl.genid)
 
@@ -1530,6 +1546,9 @@ func (c *client) processMsg(msg []byte) {
 		// Normal delivery
 		mh := c.msgHeader(msgh[:si], sub)
 		c.deliverMsg(sub, mh, msg)
+		if doRate {
+			srv.doRateControl(c.rateMaxMsgs, c.rateMaxBytes, int64(msgSize))
+		}
 	}
 
 	// Check to see if we have our own rand yet. Global rand
@@ -1548,7 +1567,11 @@ func (c *client) processMsg(msg []byte) {
 			sub := qsubs[index]
 			if sub != nil {
 				mh := c.msgHeader(msgh[:si], sub)
-				if c.deliverMsg(sub, mh, msg) {
+				delivered := c.deliverMsg(sub, mh, msg)
+				if doRate {
+					srv.doRateControl(c.rateMaxMsgs, c.rateMaxBytes, int64(msgSize))
+				}
+				if delivered {
 					break
 				}
 			}
